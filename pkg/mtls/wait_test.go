@@ -19,6 +19,7 @@ package mtls
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,7 +42,7 @@ func TestWaitForCertificateFiles(t *testing.T) {
 	}
 }
 
-func TestCertificateFilesExist_MissingFile(t *testing.T) {
+func TestWaitForCertificateFiles_MissingFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{
 		CertFile: filepath.Join(dir, "cert.pem"),
@@ -54,7 +55,36 @@ func TestCertificateFilesExist_MissingFile(t *testing.T) {
 		}
 	}
 
-	if certificateFilesExist(cfg) {
-		t.Fatal("certificateFilesExist() = true, want false")
+	err := WaitForCertificateFiles(cfg, 10*time.Millisecond)
+	if err == nil {
+		t.Fatal("WaitForCertificateFiles() expected timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), cfg.CAFile) {
+		t.Fatalf("WaitForCertificateFiles() error = %q, want missing path %q", err.Error(), cfg.CAFile)
+	}
+}
+
+func TestCertificateFilesStatus_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{
+		CertFile: filepath.Join(dir, "cert.pem"),
+		KeyFile:  filepath.Join(dir, "key.pem"),
+		CAFile:   filepath.Join(dir, "ca.pem"),
+	}
+	for _, path := range []string{cfg.CertFile, cfg.KeyFile} {
+		if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
+			t.Fatalf("write test file: %v", err)
+		}
+	}
+
+	exist, missing, err := certificateFilesStatus(cfg)
+	if err != nil {
+		t.Fatalf("certificateFilesStatus() error = %v", err)
+	}
+	if exist {
+		t.Fatal("certificateFilesStatus() exist = true, want false")
+	}
+	if len(missing) != 1 || missing[0] != cfg.CAFile {
+		t.Fatalf("certificateFilesStatus() missing = %v, want [%s]", missing, cfg.CAFile)
 	}
 }

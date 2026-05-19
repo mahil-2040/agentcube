@@ -19,28 +19,40 @@ package mtls
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
 // WaitForCertificateFiles waits until the configured cert, key, and CA files exist.
 func WaitForCertificateFiles(cfg Config, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	var missing []string
 	for {
-		if certificateFilesExist(cfg) {
+		exist, currentMissing, err := certificateFilesStatus(cfg)
+		if err != nil {
+			return fmt.Errorf("failed to access mTLS cert/key/CA files: %w", err)
+		}
+		if exist {
 			return nil
 		}
+		missing = currentMissing
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for mTLS cert/key/CA files")
+			return fmt.Errorf("timed out waiting for mTLS cert/key/CA files: missing %s", strings.Join(missing, ", "))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 }
 
-func certificateFilesExist(cfg Config) bool {
+func certificateFilesStatus(cfg Config) (bool, []string, error) {
+	var missing []string
 	for _, path := range []string{cfg.CertFile, cfg.KeyFile, cfg.CAFile} {
 		if _, err := os.Stat(path); err != nil {
-			return false
+			if os.IsNotExist(err) {
+				missing = append(missing, path)
+				continue
+			}
+			return false, nil, fmt.Errorf("stat %q: %w", path, err)
 		}
 	}
-	return true
+	return len(missing) == 0, missing, nil
 }

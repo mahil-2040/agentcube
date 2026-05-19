@@ -6,6 +6,13 @@ IFS=$'\n\t'
 E2E_CLUSTER_NAME=${E2E_CLUSTER_NAME:-agentcube-e2e}
 E2E_CLEAN_CLUSTER=${E2E_CLEAN_CLUSTER:-true}
 E2E_SKIP_SETUP=${E2E_SKIP_SETUP:-false}
+if [ -z "${MTLS_ENABLED+x}" ]; then
+    if [ "${E2E_SKIP_SETUP}" = "true" ]; then
+        MTLS_ENABLED=false
+    else
+        MTLS_ENABLED=true
+    fi
+fi
 AGENT_SANDBOX_VERSION=${AGENT_SANDBOX_VERSION:-v0.1.1}
 WORKLOAD_MANAGER_IMAGE=${WORKLOAD_MANAGER_IMAGE:-workloadmanager:latest}
 ROUTER_IMAGE=${ROUTER_IMAGE:-agentcube-router:latest}
@@ -91,6 +98,18 @@ require_python() {
         echo "Python package 'agentcube' not found in virtual environment. Please ensure sdk-python is properly installed." >&2
         exit 1
     }
+}
+
+apply_workload_fixture() {
+    local source=$1
+    local rendered
+    rendered=$(mktemp)
+    sed -E "s/^([[:space:]]*)namespace:[[:space:]]*.*/\1namespace: ${WORKLOAD_NAMESPACE}/" "$source" > "$rendered"
+    if ! kubectl apply --validate=false -f "$rendered"; then
+        rm -f "$rendered"
+        return 1
+    fi
+    rm -f "$rendered"
 }
 
 tcp_port_open() {
@@ -319,7 +338,7 @@ run_setup() {
 
     step "Deploying AgentCube via Helm (using native parameters)..."
     # Prepare extra environment variables as JSON for Helm
-    WM_EXTRA_ENV='[{"name":"REDIS_PASSWORD_REQUIRED","value":"false"},{"name":"JWT_KEY_SECRET_NAMESPACE","value":"agentcube-system"}]'
+    WM_EXTRA_ENV=$(printf '[{"name":"REDIS_PASSWORD_REQUIRED","value":"false"},{"name":"JWT_KEY_SECRET_NAMESPACE","value":"%s"}]' "${AGENTCUBE_NAMESPACE}")
     ROUTER_EXTRA_ENV='[{"name":"REDIS_PASSWORD_REQUIRED","value":"false"}]'
 
     # Install SPIRE CRDs (Required before installing the chart with spire.enabled=true)
@@ -359,23 +378,22 @@ run_setup() {
     kubectl create clusterrolebinding e2e-test-binding --clusterrole=workloadmanager --serviceaccount="${AGENTCUBE_NAMESPACE}:e2e-test" || true
 
     step "Creating test AgentRuntimes..."
-    # The test fixtures use namespace: agentcube (user workload namespace)
     kubectl create namespace "${WORKLOAD_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
     # Create normal echo-agent
-    kubectl apply --validate=false -f test/e2e/echo_agent.yaml
+    apply_workload_fixture test/e2e/echo_agent.yaml
     # Create echo-agent-short-ttl with short sessionTimeout for TTL testing
     tmp_ttl_agent=$(mktemp)
     sed 's/name: echo-agent/name: echo-agent-short-ttl/; s/app: echo-agent/app: echo-agent-short-ttl/; s/sessionTimeout: "15m"/sessionTimeout: "30s"/' test/e2e/echo_agent.yaml > "$tmp_ttl_agent"
-    kubectl apply --validate=false -f "$tmp_ttl_agent"
+    apply_workload_fixture "$tmp_ttl_agent"
     rm -f "$tmp_ttl_agent"
 
     step "Creating test CodeInterpreter..."
     # Create e2e-code-interpreter CodeInterpreter
-    kubectl apply --validate=false -f test/e2e/e2e_code_interpreter.yaml
+    apply_workload_fixture test/e2e/e2e_code_interpreter.yaml
 
     step "Waiting for AgentRuntimes to be ready..."
-    kubectl get agentruntime echo-agent -n "${AGENTCUBE_NAMESPACE}" -o jsonpath='{.metadata.name}{"\n"}' || echo "echo-agent may still be starting..."
-    kubectl get agentruntime echo-agent-short-ttl -n "${AGENTCUBE_NAMESPACE}" -o jsonpath='{.metadata.name}{"\n"}' || echo "echo-agent-short-ttl may still be starting..."
+    kubectl get agentruntime echo-agent -n "${WORKLOAD_NAMESPACE}" -o jsonpath='{.metadata.name}{"\n"}' || echo "echo-agent may still be starting..."
+    kubectl get agentruntime echo-agent-short-ttl -n "${WORKLOAD_NAMESPACE}" -o jsonpath='{.metadata.name}{"\n"}' || echo "echo-agent-short-ttl may still be starting..."
     echo "AgentRuntimes created, waiting for pods to be ready..."
     sleep 10
 }
@@ -476,11 +494,11 @@ require_python
 TEST_FAILED=0
 
 echo "Running Go tests..."
-# When SPIRE/mTLS is active, WORKLOAD_MANAGER_URL uses https:// but test client has no client cert.
-# Pass MTLS_ENABLED=true so tests can skip direct-WM calls (code interpreter tests) if needed.
+# When SPIRE/mTLS is active, direct-WM tests skip because the test client has no client cert.
 if ! WORKLOAD_MANAGER_URL="http://localhost:${WORKLOAD_MANAGER_LOCAL_PORT}" \
    ROUTER_URL="http://localhost:${ROUTER_LOCAL_PORT}" \
-   MTLS_ENABLED=true \
+   MTLS_ENABLED="${MTLS_ENABLED}" \
+   WORKLOAD_NAMESPACE="${WORKLOAD_NAMESPACE}" \
    API_TOKEN=$API_TOKEN \
    go test -v ./test/e2e/...; then
     TEST_FAILED=1
@@ -491,7 +509,7 @@ cd "$(dirname "$0")"
 
 if ! WORKLOAD_MANAGER_URL="http://localhost:${WORKLOAD_MANAGER_LOCAL_PORT}" \
    ROUTER_URL="http://localhost:${ROUTER_LOCAL_PORT}" \
-   MTLS_ENABLED=true \
+   MTLS_ENABLED="${MTLS_ENABLED}" \
    API_TOKEN=$API_TOKEN \
    AGENTCUBE_NAMESPACE="${WORKLOAD_NAMESPACE}" \
    "$E2E_VENV_DIR/bin/python" test_codeinterpreter.py; then

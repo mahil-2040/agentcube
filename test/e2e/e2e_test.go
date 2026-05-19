@@ -57,12 +57,12 @@ const (
 	// ownerKindSandboxWarmPool is the owner reference kind for SandboxWarmPool resources
 	ownerKindSandboxWarmPool = "SandboxWarmPool"
 
-	agentcubeNamespace     = "agentcube"
 	e2eCodeInterpreterName = "e2e-code-interpreter"
 )
 
 var (
-	scheme = runtime.NewScheme()
+	agentcubeNamespace = getEnv("WORKLOAD_NAMESPACE", "agentcube")
+	scheme             = runtime.NewScheme()
 )
 
 func init() {
@@ -1057,6 +1057,7 @@ func loadCodeInterpreterYAML(path string) (*v1alpha1.CodeInterpreter, error) {
 		return nil, fmt.Errorf("object in %s is not a CodeInterpreter", path)
 	}
 
+	ci.Namespace = agentcubeNamespace
 	return ci, nil
 }
 
@@ -1080,6 +1081,7 @@ func loadYAML(path string) (client.Object, error) {
 		return nil, fmt.Errorf("object in %s is not a client.Object", path)
 	}
 
+	clientObj.SetNamespace(agentcubeNamespace)
 	return clientObj, nil
 }
 
