@@ -80,7 +80,7 @@ func main() {
 	}
 	if tlsConfig.CertFile != "" && tlsConfig.KeyFile != "" && tlsConfig.CAFile != "" {
 		klog.Infof("Waiting for WorkloadManager mTLS cert/key/CA files")
-		if err := waitForMTLSFiles(tlsConfig, mtlsFileWaitTimeout); err != nil {
+		if err := mtls.WaitForCertificateFiles(tlsConfig, mtlsFileWaitTimeout); err != nil {
 			klog.Fatalf("Invalid mTLS configuration: %v", err)
 		}
 	}
@@ -213,26 +213,4 @@ func validateTLSFlags(enableTLS bool, cfg mtls.Config) error {
 		return fmt.Errorf("both --tls-cert and --tls-key must be provided when --enable-tls is set")
 	}
 	return nil
-}
-
-func waitForMTLSFiles(cfg mtls.Config, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if mtlsFilesExist(cfg) {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for mTLS cert/key/CA files")
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-}
-
-func mtlsFilesExist(cfg mtls.Config) bool {
-	for _, path := range []string{cfg.CertFile, cfg.KeyFile, cfg.CAFile} {
-		if _, err := os.Stat(path); err != nil {
-			return false
-		}
-	}
-	return true
 }
